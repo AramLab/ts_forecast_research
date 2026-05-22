@@ -4,7 +4,6 @@ analysis/metrics.py
 """
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 
 def smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -35,9 +34,12 @@ def calculate_metrics(y_true, y_pred, y_train, m: int = 12) -> dict:
     y_true  = np.array(y_true,  dtype=float)
     y_pred  = np.array(y_pred,  dtype=float)
     y_train = np.array(y_train, dtype=float)
+    # Используем NumPy-реализации, чтобы избежать зависимостей на sklearn/scipy
+    rmse = float(np.sqrt(np.mean((y_true - y_pred) ** 2)))
+    mae = float(np.mean(np.abs(y_true - y_pred)))
     return {
-        "RMSE":      float(np.sqrt(mean_squared_error(y_true, y_pred))),
-        "MAE":       float(mean_absolute_error(y_true, y_pred)),
+        "RMSE":      rmse,
+        "MAE":       mae,
         "sMAPE (%)": smape(y_true, y_pred),
         "MASE":      mase(y_true, y_pred, y_train, m),
     }

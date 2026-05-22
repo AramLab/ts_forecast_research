@@ -92,5 +92,4 @@ def lstm_forecast(
 
 
 def lstm_fast(series: pd.Series, test_size: int = 18):
-    """Лёгкий LSTM для использования внутри CEEMDAN."""
     return lstm_forecast(series, test_size=test_size, fast=True)

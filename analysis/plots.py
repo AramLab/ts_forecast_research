@@ -49,20 +49,61 @@ def plot_forecast(
     """Визуализация одного прогноза."""
     fig, ax = plt.subplots(figsize=(13, 5))
 
-    train_idx = range(len(train))
-    test_idx  = range(len(train), len(train) + len(test))
+    train_idx = train.index
+    test_idx = test.index
 
-    ax.plot(train_idx, train.values, "b-", lw=2, label="Обучение", alpha=0.7)
-    ax.plot(test_idx,  test.values,  "g-", lw=2, label="Факт",     alpha=0.85)
-    ax.plot(
-        test_idx, forecast,
-        linestyle="--", lw=2.5,
-        color=_model_color(model_name),
-        label=f"{model_name}  sMAPE={smape_val:.1f}%",
-    )
+    # Рисуем фактические значения как одну непрерывную линию (train + test),
+    # затем накладываем подсветку обучающей части.
+    try:
+        if len(test_idx) > 0:
+            full_idx = np.concatenate([train_idx, test_idx])
+            full_vals = np.concatenate([train.values, test.values])
+        else:
+            full_idx = train_idx
+            full_vals = train.values
+        ax.plot(full_idx, full_vals, "k-", lw=2, label="Факт", alpha=0.9)
+        ax.plot(train_idx, train.values, "b-", lw=2, label="Обучение", alpha=0.7)
+    except Exception:
+        ax.plot(train_idx, train.values, "b-", lw=2, label="Обучение", alpha=0.7)
+        ax.plot(test_idx, test.values, "g-", lw=2, label="Факт", alpha=0.85)
+    # Рисуем прогноз как непрерывную линию, начиная с последней точки обучения
+    try:
+        if len(test_idx) > 0:
+            last_train_val = train.values[-1]
+            last_train_idx = train_idx[-1]
+            if last_train_idx == test_idx[0]:
+                ax.plot(
+                    test_idx, forecast,
+                    linestyle="--", lw=2.5,
+                    color=_model_color(model_name),
+                    label=f"{model_name}  sMAPE={smape_val:.1f}%",
+                )
+            else:
+                ax.plot(
+                    [last_train_idx] + list(test_idx),
+                    np.concatenate([[last_train_val], forecast]),
+                    linestyle="--", lw=2.5,
+                    color=_model_color(model_name),
+                    label=f"{model_name}  sMAPE={smape_val:.1f}%",
+                )
+        else:
+            ax.plot(
+                test_idx, forecast,
+                linestyle="--", lw=2.5,
+                color=_model_color(model_name),
+                label=f"{model_name}  sMAPE={smape_val:.1f}%",
+            )
+    except Exception:
+        ax.plot(
+            test_idx, forecast,
+            linestyle="--", lw=2.5,
+            color=_model_color(model_name),
+            label=f"{model_name}  sMAPE={smape_val:.1f}%",
+        )
 
     # Вертикальная граница обучение/тест
-    ax.axvline(x=len(train) - 0.5, color="gray", linestyle=":", alpha=0.6)
+    if len(test) > 0:
+        ax.axvline(x=test.index[0], color="gray", linestyle=":", alpha=0.6)
     ax.set_title(f"{model_name} — {title}", fontsize=13)
     ax.set_xlabel("Период")
     ax.set_ylabel("Значение")
@@ -75,6 +116,132 @@ def plot_forecast(
         os.makedirs(save_dir, exist_ok=True)
         fname = f"{model_name}_{title}".replace(" ", "_").replace("/", "_")[:80]
         plt.savefig(os.path.join(save_dir, f"{fname}.png"), dpi=100, bbox_inches="tight")
+
+    if show:
+        plt.show()
+    plt.close()
+
+
+# ── Лучший базовый vs лучший гибрид (для диплома) ────────────────────────────
+_BASE_MODELS = {"ARIMA", "ETS", "Prophet", "LSTM"}
+
+
+def plot_best_pair(
+    train: pd.Series,
+    test: pd.Series,
+    forecasts: dict,          # {model_name: np.ndarray}
+    metrics_df: pd.DataFrame,
+    title: str,
+    train_tail: int = 60,     # сколько последних точек обучения показывать
+    save_dir: Optional[str] = None,
+    show: bool = True,
+) -> None:
+    """
+    Рисунок 2×1: верхний подграфик — лучшая базовая модель по sMAPE,
+    нижний — лучший гибрид. Создаёт ОДИН файл best_pair_<title>.png.
+
+    Удобно вставлять в диплом: один рисунок с номером, две панели,
+    всё на одной странице.
+    """
+    if metrics_df.empty or not forecasts:
+        return
+
+    available = [m for m in metrics_df.index if m in forecasts]
+    base_models   = [m for m in available if m in _BASE_MODELS]
+    hybrid_models = [m for m in available if m not in _BASE_MODELS]
+
+    if not base_models or not hybrid_models:
+        # Если нет пары — рисуем только то, что есть
+        candidates = base_models or hybrid_models
+        if not candidates:
+            return
+        selected = candidates[:1]
+        labels   = ["Базовая" if candidates is base_models else "Гибрид"]
+    else:
+        selected = [base_models[0], hybrid_models[0]]
+        labels   = ["Лучшая базовая модель", "Лучший гибрид"]
+
+    n = len(selected)
+    fig, axes = plt.subplots(n, 1, figsize=(13, 4.5 * n), sharex=False)
+    if n == 1:
+        axes = [axes]
+
+    # Хвост обучающей выборки — чтобы не рисовать 500+ точек
+    tail = min(train_tail, len(train))
+    train_tail_data = train.iloc[-tail:]
+    train_idx = train_tail_data.index
+    test_idx = test.index
+
+    panel_colors = {"Лучшая базовая модель": "#c0392b",
+                    "Лучший гибрид":         "#2980b9"}
+
+    for ax, mname, label in zip(axes, selected, labels):
+        smape_val = metrics_df.loc[mname, "sMAPE (%)"]
+        header_color = panel_colors.get(label, "#555555")
+
+        # Показываем фактическую кривую как непрерывную линию (хвост обучения + тест),
+        # и накладываем хвост обучения серым для контраста.
+        try:
+            if len(test_idx) > 0:
+                full_idx = np.concatenate([train_idx, test_idx])
+                full_vals = np.concatenate([train_tail_data.values, test.values])
+            else:
+                full_idx = train_idx
+                full_vals = train_tail_data.values
+            ax.plot(full_idx, full_vals,
+                    color="#2c3e50", lw=2.5, label="Факт", alpha=0.95, zorder=10)
+            ax.plot(train_idx, train_tail_data.values,
+                    color="#7f8c8d", lw=1.8, label="Обучение (хвост)", alpha=0.7)
+        except Exception:
+            ax.plot(train_idx, train_tail_data.values,
+                    color="#7f8c8d", lw=1.8, label="Обучение (хвост)", alpha=0.7)
+            ax.plot(test_idx, test.values,
+                    color="#2c3e50", lw=2.5, label="Факт", alpha=0.95, zorder=10)
+        # Прогноз — рисуем непрерывно от последней точки обучения
+        try:
+            last_train = train_tail_data.values[-1]
+            last_idx = train_tail_data.index[-1]
+            fc = forecasts[mname]
+            if len(test_idx) > 0 and last_idx != test_idx[0]:
+                ax.plot(
+                    [last_idx] + list(test_idx),
+                    np.concatenate([[last_train], fc]),
+                    linestyle="--", lw=2.5,
+                    color=_model_color(mname),
+                    label=f"Прогноз  sMAPE = {smape_val:.2f}%",
+                    zorder=9,
+                )
+            else:
+                ax.plot(test_idx, fc,
+                        linestyle="--", lw=2.5,
+                        color=_model_color(mname),
+                        label=f"Прогноз  sMAPE = {smape_val:.2f}%",
+                        zorder=9)
+        except Exception:
+            ax.plot(test_idx, forecasts[mname],
+                    linestyle="--", lw=2.5,
+                    color=_model_color(mname),
+                    label=f"Прогноз  sMAPE = {smape_val:.2f}%",
+                    zorder=9)
+
+        if len(test_idx) > 0:
+            ax.axvline(x=test_idx[0], color="gray", linestyle=":", alpha=0.5, lw=1.2)
+
+        ax.set_title(f"{label}: {mname}  (sMAPE = {smape_val:.2f}%)",
+                     fontsize=11, fontweight="bold", color=header_color, loc="left")
+        ax.set_xlabel("Период")
+        ax.set_ylabel("Значение")
+        ax.legend(fontsize=9, loc="best")
+        ax.grid(True, alpha=0.25)
+
+    fig.suptitle(title, fontsize=13, fontweight="bold", y=1.01)
+    plt.tight_layout()
+
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+        fname = f"best_pair_{title}".replace(" ", "_").replace("/", "_")[:90]
+        plt.savefig(os.path.join(save_dir, f"{fname}.png"),
+                    dpi=120, bbox_inches="tight")
 
     if show:
         plt.show()
@@ -97,22 +264,53 @@ def plot_all_forecasts(
 
     # --- Левый: все прогнозы ---
     ax = axes[0]
-    train_idx = range(len(train))
-    test_idx  = range(len(train), len(train) + len(test))
+    train_idx = train.index
+    test_idx = test.index
 
-    ax.plot(train_idx, train.values, "b-", lw=2, label="Обучение", alpha=0.6)
-    ax.plot(test_idx,  test.values,  "k-", lw=2.5, label="Факт",   alpha=0.9, zorder=10)
+    # Рисуем фактические как непрерывную линию (train + test), затем подсветка train
+    try:
+        if len(test_idx) > 0:
+            full_idx = np.concatenate([train_idx, test_idx])
+            full_vals = np.concatenate([train.values, test.values])
+        else:
+            full_idx = train_idx
+            full_vals = train.values
+        ax.plot(full_idx, full_vals, "k-", lw=2.5, label="Факт", alpha=0.9, zorder=10)
+        ax.plot(train_idx, train.values, "b-", lw=2, label="Обучение", alpha=0.6)
+    except Exception:
+        ax.plot(train_idx, train.values, "b-", lw=2, label="Обучение", alpha=0.6)
+        ax.plot(test_idx, test.values, "k-", lw=2.5, label="Факт", alpha=0.9, zorder=10)
 
     for mname, fcast in forecasts.items():
         smape_val = metrics_df.loc[mname, "sMAPE (%)"] if mname in metrics_df.index else float("nan")
-        ax.plot(
-            test_idx, fcast,
-            linestyle="--", lw=1.8, alpha=0.8,
-            color=_model_color(mname),
-            label=f"{mname} ({smape_val:.1f}%)",
-        )
+        try:
+            last_train = train.values[-1]
+            last_idx = train_idx[-1]
+            if len(test_idx) > 0 and last_idx != test_idx[0]:
+                ax.plot(
+                    [last_idx] + list(test_idx),
+                    np.concatenate([[last_train], fcast]),
+                    linestyle="--", lw=1.8, alpha=0.8,
+                    color=_model_color(mname),
+                    label=f"{mname} ({smape_val:.1f}%)",
+                )
+            else:
+                ax.plot(
+                    test_idx, fcast,
+                    linestyle="--", lw=1.8, alpha=0.8,
+                    color=_model_color(mname),
+                    label=f"{mname} ({smape_val:.1f}%)",
+                )
+        except Exception:
+            ax.plot(
+                test_idx, fcast,
+                linestyle="--", lw=1.8, alpha=0.8,
+                color=_model_color(mname),
+                label=f"{mname} ({smape_val:.1f}%)",
+            )
 
-    ax.axvline(x=len(train) - 0.5, color="gray", linestyle=":", alpha=0.5)
+    if len(test_idx) > 0:
+        ax.axvline(x=test_idx[0], color="gray", linestyle=":", alpha=0.5)
     ax.set_title(f"Все прогнозы — {title}", fontsize=12)
     ax.set_xlabel("Период")
     ax.set_ylabel("Значение")
@@ -157,12 +355,15 @@ def plot_dataset_summary(
     dataset_name: str,
     save_dir: Optional[str] = None,
     show: bool = True,
+    top_n_models: Optional[int] = None,
 ) -> None:
     """Средний sMAPE + boxplot по всем рядам датасета."""
     if summary_df is None or summary_df.empty:
         return
 
     model_means = summary_df.groupby("Model")["sMAPE (%)"].mean().sort_values()
+    if top_n_models is not None and top_n_models > 0:
+        model_means = model_means.iloc[:top_n_models]
     colors = [_model_color(m) for m in model_means.index]
 
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
@@ -173,7 +374,10 @@ def plot_dataset_summary(
     ax.set_xticks(range(len(model_means)))
     ax.set_xticklabels(model_means.index, rotation=40, ha="right", fontsize=9)
     ax.set_ylabel("Средний sMAPE (%)")
-    ax.set_title(f"{dataset_name}: Средний sMAPE по моделям")
+    ax.set_title(
+        f"{dataset_name}: Средний sMAPE по моделям"
+        + (f" (топ-{len(model_means)})" if top_n_models is not None and top_n_models > 0 else "")
+    )
     ax.grid(axis="y", alpha=0.3)
     for b in bars:
         ax.text(
@@ -196,7 +400,10 @@ def plot_dataset_summary(
         patch.set_alpha(0.7)
     ax2.set_xticklabels(order, rotation=40, ha="right", fontsize=9)
     ax2.set_ylabel("sMAPE (%)")
-    ax2.set_title(f"{dataset_name}: Распределение sMAPE")
+    ax2.set_title(
+        f"{dataset_name}: Распределение sMAPE"
+        + (f" (топ-{len(order)})" if top_n_models is not None and top_n_models > 0 else "")
+    )
     ax2.grid(axis="y", alpha=0.3)
 
     plt.suptitle(f"Анализ {dataset_name}", fontsize=14, fontweight="bold")
@@ -267,6 +474,7 @@ def plot_heatmap(
     dataset_name: str = "",
     save_dir: Optional[str] = None,
     show: bool = True,
+    top_n_models: Optional[int] = None,
 ) -> None:
     """Тепловая карта метрики: строки = ряды, столбцы = модели."""
     if summary_df is None or summary_df.empty:
@@ -279,7 +487,10 @@ def plot_heatmap(
         return
 
     # Сортировка по среднему
-    pivot = pivot[pivot.mean().sort_values().index]
+    col_order = pivot.mean().sort_values().index
+    if top_n_models is not None and top_n_models > 0:
+        col_order = col_order[:top_n_models]
+    pivot = pivot[col_order]
 
     fig, ax = plt.subplots(figsize=(max(10, len(pivot.columns) * 1.5), min(20, len(pivot) * 0.4 + 2)))
     sns.heatmap(

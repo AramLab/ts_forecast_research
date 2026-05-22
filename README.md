@@ -11,10 +11,16 @@
 python run_experiment.py --dataset synthetic --no_plots
 
 # M3 Monthly (локальный TSF-файл, папка m3/datasets/)
-python run_experiment.py --dataset m3 --n_series 50 --workers 5 --no_plots
+python run_experiment.py --dataset m3 --m3_group Monthly --n_series 50 --workers 5 --no_plots
 
 # M4 Monthly (длинные ряды N≥500, скачивается автоматически)
-python run_experiment.py --dataset m4 --n_series 50 --workers 5 --no_plots
+python run_experiment.py --dataset m4 --m4_group Monthly --n_series 50 --workers 5 --no_plots
+
+# M3 Quarterly / Yearly / Other
+python run_experiment.py --dataset m3 --m3_group Quarterly --n_series 50 --workers 5 --no_plots
+
+# M4 Quarterly / Yearly / Daily / Weekly / Hourly
+python run_experiment.py --dataset m4 --m4_group Quarterly --n_series 50 --workers 5 --no_plots
 
 # Два датасета одновременно
 python run_experiment.py --dataset m3 --workers 4 --out results/m3 &
@@ -29,6 +35,8 @@ wait
 | `--dataset` | m4 | `synthetic`, `m3`, `m4` |
 | `--n_series` | 50 | Рядов (для synthetic игнорируется) |
 | `--min_length` | авто | Мин. длина (M4: 500, M3: 100) |
+| `--m3_group` | Monthly | Группа M3 (`Monthly`, `Quarterly`, `Yearly`, `Other`) |
+| `--m4_group` | Monthly | Группа M4 (`Hourly`, `Daily`, `Weekly`, `Monthly`, `Quarterly`, `Yearly`) |
 | `--horizon` | 18 | Горизонт h |
 | `--workers` | 4 | Параллельных процессов (M3 Pro: 5) |
 | `--timeout` | 600 | Таймаут на ряд (сек) |

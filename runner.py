@@ -23,7 +23,7 @@ from typing import Optional
 
 from analysis.metrics import infer_period
 from analysis.plots import (
-    plot_forecast, plot_all_forecasts,
+    plot_forecast, plot_all_forecasts, plot_best_pair,
     plot_dataset_summary, plot_datasets_comparison, plot_heatmap,
 )
 from analysis.report import generate_dataset_report, generate_summary_report
@@ -31,7 +31,12 @@ from analysis.report import generate_dataset_report, generate_summary_report
 
 def _check_components() -> dict:
     status = {}
+    import os
+    skip_lstm = os.environ.get("NO_LSTM") == "1"
     for pkg, key in [("PyEMD", "ceemdan"), ("tensorflow", "lstm"), ("pywt", "wavelet")]:
+        if key == "lstm" and skip_lstm:
+            status[key] = False
+            continue
         try:
             __import__(pkg)
             status[key] = True
@@ -68,6 +73,7 @@ def forecast_series(
     ceemdan_trials: int = 50,
     plots_dir: Optional[str] = None,
     show_plots: bool = False,
+    top3_plots: bool = False,
     verbose: bool = True,
 ) -> tuple[pd.DataFrame, dict]:
     """
@@ -96,7 +102,7 @@ def forecast_series(
             elapsed = time.time() - t0
             if verbose:
                 print(f"sMAPE={met['sMAPE (%)']:.1f}%  ({elapsed:.0f}s)")
-            if plots_dir or show_plots:
+            if (plots_dir or show_plots) and not top3_plots:
                 plot_forecast(
                     train, test, pred.values, title=title,
                     model_name=name, smape_val=met["sMAPE (%)"],
@@ -136,10 +142,11 @@ def forecast_series(
     # ── 5-8: CEEMDAN-гибриды ────────────────────────────────────────────────
     if use_ceemdan and status["ceemdan"]:
         from ceemdan.ceemdan_hybrid import (
-            ceemdan_arima, ceemdan_ets, ceemdan_prophet, ceemdan_lstm,
+            ceemdan_arima, ceemdan_ets, ceemdan_prophet,
+            ceemdan_es, ceemdan_lstm_true,   # добавляем настоящую LSTM
             _get_imfs, _IMF_CACHE,
         )
-        # Прогреваем кеш: декомпозиция ОДИН раз для всех 4 гибридов
+        # Прогреваем кеш: декомпозиция ОДИН раз для всех гибридов
         try:
             if verbose:
                 print(f"  ▶ CEEMDAN декомпозиция...", end=" ", flush=True)
@@ -155,10 +162,16 @@ def forecast_series(
         run("CEEMDAN+ARIMA",   ceemdan_arima,   series, test_size=test_size, **_ckw)
         run("CEEMDAN+ETS",     ceemdan_ets,     series, test_size=test_size, **_ckw)
         run("CEEMDAN+Prophet", ceemdan_prophet, series, test_size=test_size, **_ckw)
+        run("CEEMDAN+ES",      ceemdan_es,      series, test_size=test_size, **_ckw)   # чистая ES
         if status["lstm"] and use_ceemdan_lstm:
-            run("CEEMDAN+LSTM", ceemdan_lstm, series, test_size=test_size, **_ckw)
+            # НАСТОЯЩИЙ CEEMDAN+LSTM (LSTM для каждой IMF)
+            run("CEEMDAN+LSTM", ceemdan_lstm_true, series, test_size=test_size, **_ckw)
         elif not use_ceemdan_lstm and verbose:
             print("  ⚡ CEEMDAN+LSTM пропущен (--low_memory)")
+        from ceemdan.ceemdan_hybrid import _IMF_CACHE
+        _IMF_CACHE.clear()
+        import gc
+        gc.collect()
 
     # ── 9-16: Вейвлет-гибриды ───────────────────────────────────────────────
     if use_wavelet and status["wavelet"]:
@@ -221,10 +234,16 @@ def forecast_series(
     metrics_df = metrics_df[["RMSE", "MAE", "sMAPE (%)", "MASE"]].sort_values("sMAPE (%)")
 
     if len(forecasts) > 1 and (plots_dir or show_plots):
-        plot_all_forecasts(
-            train, test, forecasts, metrics_df, title=title,
-            save_dir=plots_dir, show=show_plots,
-        )
+        if top3_plots:
+            plot_best_pair(
+                train, test, forecasts, metrics_df, title=title,
+                save_dir=plots_dir, show=show_plots,
+            )
+        else:
+            plot_all_forecasts(
+                train, test, forecasts, metrics_df, title=title,
+                save_dir=plots_dir, show=show_plots,
+            )
 
     if verbose:
         print(f"  {'─'*50}")
@@ -248,6 +267,7 @@ def analyze_dataset(
     results_dir="results",
     show_plots=False,
     save_plots=True,
+    top3_plots=False,
     checkpoint_every=50,
 ) -> Optional[pd.DataFrame]:
     """
@@ -296,6 +316,7 @@ def analyze_dataset(
                 ceemdan_trials=ceemdan_trials,
                 plots_dir=ds_plots_dir,
                 show_plots=show_plots,
+                top3_plots=top3_plots,
                 verbose=True,
             )
             elapsed = time.time() - t_row
@@ -363,6 +384,7 @@ def run_full_analysis(
     results_dir="results",
     show_plots=False,
     save_plots=True,
+    top3_plots=False,
     checkpoint_every=50,
 ) -> dict:
     """
@@ -398,6 +420,7 @@ def run_full_analysis(
             results_dir=results_dir,
             show_plots=show_plots,
             save_plots=save_plots,
+            top3_plots=top3_plots,
             checkpoint_every=checkpoint_every,
         )
         summaries[ds_name] = summary
@@ -451,6 +474,7 @@ def run_synthetic(
     results_dir: str = "results/synthetic",
     show_plots: bool = False,
     save_plots: bool = True,
+    top3_plots: bool = False,
     verbose: bool = True,
 ) -> pd.DataFrame:
     """
@@ -497,6 +521,7 @@ def run_synthetic(
             ceemdan_trials=ceemdan_trials,
             plots_dir=ser_plots,
             show_plots=show_plots,
+            top3_plots=top3_plots,
             verbose=verbose,
         )
 

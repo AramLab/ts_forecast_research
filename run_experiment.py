@@ -75,6 +75,12 @@ def _parse() -> argparse.Namespace:
     p.add_argument("--dataset",   default="m4",
                    choices=["synthetic", "m3", "m4"])
     p.add_argument("--m3_tsf",    default="m3/datasets/m3_monthly_dataset.tsf")
+    p.add_argument("--m3_group",  default="Monthly",
+                   choices=["Monthly", "Quarterly", "Yearly", "Other"],
+                   help="Группа M3")
+    p.add_argument("--m4_group",  default="Monthly",
+                   choices=["Hourly", "Daily", "Weekly", "Monthly", "Quarterly", "Yearly"],
+                   help="Группа M4")
     p.add_argument("--n_series",  type=int, default=50,
                    help="Число рядов (для synthetic игнорируется)")
     p.add_argument("--min_length", type=int, default=0,
@@ -96,6 +102,8 @@ def _parse() -> argparse.Namespace:
                    help="Пропустить Transformer-модели")
     p.add_argument("--no_plots",  action="store_true",
                    help="HTML-отчёт без графиков")
+    p.add_argument("--top3_plots", action="store_true",
+                   help="Сохранять лучший базовый vs лучший гибрид (один рисунок 2×1 на ряд)")
     p.add_argument("--ceemdan_trials", type=int, default=30)
     p.add_argument("--n_wavelet_modes", type=int, default=3,
                    help="Макс. число вейвлет-мод (1-3, default 3)")
@@ -214,10 +222,16 @@ def _load_tasks(args, h: int, project_dir: str) -> list[tuple]:
         return tasks
 
     elif args.dataset == "m3":
-        from data.loaders import load_m3_tsf, prepare_series
-        df = load_m3_tsf(args.m3_tsf)
+        from data.loaders import load_m3, load_m3_tsf, prepare_series
+        if args.m3_group == "Monthly" and args.m3_tsf:
+            df = load_m3_tsf(args.m3_tsf)
+            if df is None:
+                print("  ⚠ fallback: загружаем M3 Monthly через datasetsforecast")
+                df = load_m3(group="Monthly")
+        else:
+            df = load_m3(group=args.m3_group)
         if df is None:
-            sys.exit("❌ M3 TSF не найден: " + args.m3_tsf)
+            sys.exit("❌ M3 не загружен. Проверьте интернет или путь к файлу")
         min_len = args.min_length or 100
         counts  = df.groupby("unique_id")["y"].count()
         valid   = counts[counts >= min_len + h].index.tolist()
@@ -235,7 +249,7 @@ def _load_tasks(args, h: int, project_dir: str) -> list[tuple]:
 
     else:  # m4
         from data.loaders import load_m4, prepare_series
-        df = load_m4(group="Monthly")
+        df = load_m4(group=args.m4_group)
         if df is None:
             sys.exit("❌ M4 не загружен. Проверьте интернет или запустите --dataset m3")
         min_len = args.min_length or 500
